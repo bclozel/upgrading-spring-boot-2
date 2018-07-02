@@ -5,9 +5,9 @@ import org.junit.runner.RunWith;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.web.reactive.server.WebTestClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,14 +16,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class SpringBootTeamApplicationTests {
 
 	@Autowired
-	private TestRestTemplate restTemplate;
+	private WebTestClient webTestClient;
 
 	@Test
 	public void showTeamShouldReturnAllMembers() {
-    ResponseEntity<Team> response = restTemplate.getForEntity("/team", Team.class);
-		assertThat(response.getStatusCodeValue()).isEqualTo(200);
-		assertThat(response.getBody().getName()).isEqualTo("Spring Boot team");
-		assertThat(response.getBody().getMembers()).hasSize(5);
+		Team team = webTestClient.get().uri("/team")
+				.accept(MediaType.APPLICATION_JSON)
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(Team.class)
+				.returnResult().getResponseBody();
+
+		assertThat(team.getName()).isEqualTo("Spring Boot team");
+		assertThat(team.getMembers()).hasSize(5);
 	}
 
 }
