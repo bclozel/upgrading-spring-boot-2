@@ -1,0 +1,418 @@
+= Upgrading to Spring Boot 2.0
+
+
+== Introduction
+
+This project shows a sample migration path from Spring Boot 1.5 to 2.0.
+This application provides a single Mustache view and a couple of web endpoints that return data
+as XML/JSON from a MongoDB database.
+
+This application is quite small (and artificial), but the goal here is to show a few things
+to consider, at the web level, while upgrading an existing Spring MVC application to Spring Boot 2.0.
+
+To view earlier versions of the application, look at the git history.
+The following sections (and commits in the git history) show each step of the upgrade process.
+
+
+== Initial Version
+
+=== Initial Application
+The first commit shows the initial Spring Boot 1.5 project.
+It's a simple Spring Boot 1.5 application with the following starter dependencies:
+
+* `spring-boot-starter-mustache`
+* `spring-boot-starter-actuator`
+* `spring-boot-starter-security`
+* `spring-boot-starter-data-mongodb`
+
+There's also some test dependencies and a dependency for embedded Mongo support.
+
+Scanning the code we can see the following classes:
+
+* `SpringBootTeamApplication` - Our main application entry point.
+* `TeamMember` & `TeamMemberRepository` - Domain concerns.
+* `TeamMemberController` - A simple Spring MVC `@Controller` that serves the Web API.
+* `IndexController` - A simple Spring MVC `@Controller` that shows a HTML view for `"/"`
+* `DataImportConfiguration` - A `@Configuration` to load some sample data.
+
+==== Run the Application
+If we run this application we can hit some URLs:
+
+The `http://localhost:8080/team[/team]` path provides the list of Spring Boot team members:
+
+[source,xml]
+----
+<team>
+	<name>Spring Boot team</name>
+	<member>
+		<name>Andy Wilkinson</name>
+		<github>wilkinsona</github>
+	</member>
+	<member>
+		<name>Stephane Nicoll</name>
+		<github>snicoll</github>
+	</member>
+	<member>
+		<name>Madhura Bhave</name>
+		<github>mbhave</github>
+	</member>
+	<member>
+		<name>Phil Webb</name>
+		<github>philwebb</github>
+	</member>
+	<member>
+		<name>Brian Clozel</name>
+		<github>bclozel</github>
+	</member>
+</team>
+----
+
+We're seeing this in XML format because we've got `jackson-dataformat-xml` on classpath and Spring configures the HTTP converter accordingly.
+Because browsers naturally ask for HTML and XML in their `"Accept"` request header, content negotiation goes with XML format.
+
+
+The `http://localhost:8080/team/philwebb[/team/{githubName}]` path provides a single team member (for example "philwebb"):
+
+[source,xml]
+----
+<member>
+	<name>Phil Webb</name>
+	<github>philwebb</github>
+</member>
+----
+
+
+
+We can always choose JSON by providing a path extension to influence the content negotiation process, like `http://localhost:8080/team/philwebb.json[/team/{githubName}.json]`:
+
+[source,json]
+----
+{
+    "name": "Phil Webb",
+    "github": "philwebb"
+},
+----
+
+If we want to look at some actuator endpoints we'll need to log in.
+The credentials are `user`/`secret` since we have the following in our `application.properties`
+
+[source,properties]
+----
+security.basic.enabled=false
+security.user.password=secret
+----
+
+The `http://localhost:8080/info[/info]` endpoint is a good one to provide a basic check.
+Also look at `http://localhost:8080/env[/env]` since we'll see the JSON change in 2.0.
+
+Now that we've seen the 1.5 application, let's upgrade to Spring Boot 2.0
+
+== Migration to Spring Boot 2.0
+
+=== Upgrade POM file to Spring Boot 2.0
+To upgrade to Spring Boot 2.0 we need to change the Spring Boot starter parent to 2.0.
+This change updates Spring Boot, all third-party dependencies, and build plugins.
+
+Although the Maven upgrade is fine, our server no longer starts.
+
+
+=== Fix the dependencies
+Our application depends on `spring-boot-starter-mustache`, which previously had a transitive dependency on `spring-boot-starter-web`.
+Since as of 2.0, Spring Boot supports both Spring MVC and Soring WebFlux, we've changed some of those arrangements as both web frameworks support this templating engine.
+
+You need to explicitly depend on the Web starter to activate Spring MVC support.
+
+[source,xml]
+----
+<dependency>
+	<groupId>org.springframework.boot</groupId>
+	<artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+----
+
+We've also changed the default template file extension to align with Mustache defaults, so we need to rename our `home.html` to `home.mustache`.
+
+==== Run the Application
+At this point the application compiles and runs again but something interesting happens.
+We now need to login to use any URL.
+What's more, we have a generated password rather than the word "`secret`" that we previously used.
+
+If you have an IDE with Spring Boot support, open `application.properties` and you'll see that our security properties have an error.
+
+
+=== Add Properties Migrator
+Since we only have a single property we could fix it pretty easily.
+If your project has lots of properties, or if you don't use an IDE with Spring Boot support you might want to use the "`properties migrator`".
+
+With the following additional dependency added, we can run the application again:
+
+[source,xml]
+----
+<dependency>
+	<groupId>org.springframework.boot</groupId>
+	<artifactId>spring-boot-properties-migrator</artifactId>
+	<scope>runtime</scope>
+</dependency>
+----
+
+==== Run the Application
+This time when we start the application we'll be able to login using "`secret`" as the password again.
+The `security.user.password` property has been automatically migrated to `spring.security.user.password`.
+
+You'll also see the following logged warning:
+
+----
+The use of configuration keys that have been renamed was found in the environment:
+
+Property source 'applicationConfig: [classpath:/application.properties]':
+	Key: security.user.password
+		Line: 6
+		Replacement: spring.security.user.password
+
+----
+
+TIP: The logged output includes the line and column number.
+This is printed from new Spring Boot 2.0 type called `Origin`.
+
+
+
+=== Fix the Properties
+The property migrator only provides a temporary fix, we should fix the real issue.
+Since the source properties file along with the line number are logged, it's pretty easy to find and change the name.
+
+
+
+=== Remove Properties Migrator
+Property migration doesn't come for free.
+There's a small performance penalty for using it so we should remove it when all the underlying issues are fixed.
+
+
+
+=== Configure Security
+Spring Boot 2.0 has very minimal security auto-configuration.
+When our application was using Spring Boot 1.5, only the actuator paths required authorization.
+Now we've upgrade, auto-configuration is applied in the same way as if `@EnableWebSecurity` were used.
+
+If we want to secure just the actuator endpoints we'll need to define our own `WebSecurityConfigurerAdapter`.
+It's generally good practice to keep the number of `WebSecurityConfigurerAdapters` to a minimum (ideally just one).
+We can use the new `EndpointRequest` and `PathRequest` helper if we want to match specific Spring Boot paths.
+
+Here's our new configuration:
+
+[source,java]
+----
+@Configuration
+public class SecurityConfiguration extends WebSecurityConfigurerAdapter {
+
+	@Override
+	protected void configure(HttpSecurity http) throws Exception {
+		http
+			.authorizeRequests()
+				.requestMatchers(EndpointRequest.toAnyEndpoint()).authenticated()
+				.anyRequest().permitAll().and()
+			.formLogin().and()
+			.httpBasic();
+	}
+
+}
+----
+
+This configuration is saying:
+
+* Any request to any actuator endpoint must be authenticated.
+* Any other request is permitted.
+* Form based login should be used when possible.
+* HTTP basic login is also supported.
+
+==== Run the Application
+If we run the application now we should be able to hit the `http://localhost:8080/team[/team]` and `http://localhost:8080/team/philwebb[/team/{name}]` paths without logging in.
+
+If we try the info actuator URL that worked in 1.5.x we'll see `http://localhost:8080/info[/info]` no longer works and we get a 404.
+This is because all actuator endpoints are now grouped together under `/actuator`.
+Use `http://localhost:8080/actuator/info[/actuator/info]` instead.
+
+TIP: You can configure the root actuator path or remove it entirely if you wish.
+
+If you look at `http://localhost:8080/actuator[/actuator]` you'll see a HAL structure providing links to all exposed endpoints.
+This works even if `spring-hateoas` isn't on the classpath.
+Notice that we're missing quite a few.
+Try `http://localhost:8080/actuator/env[/actuator/env]` for example, and you'll see it's really not there.
+
+=== Expose Actuator Endpoints
+In Spring Boot 2.0 it's much harder to accidentally expose actuator endpoints on the web.
+Only `/info` and `/health` are exposed by default.
+
+To expose a specific set of endpoints to the web you need to use the `management.endpoints.web.exposure` property.
+You can define both `include` and `exclude` patterns.
+Since this is a demo, we'll just expose everything:
+
+[source,java]
+----
+management.endpoints.web.exposure.include=*
+----
+
+==== Run the Application
+If we run the application again we can now access `http://localhost:8080/actuator/env[/actuator/env]` and get the following:
+
+[source,json]
+----
+{
+  "activeProfiles": [],
+  "propertySources": [
+      {
+      "name": "applicationConfig: [classpath:/application.properties]",
+      "properties": {
+        "info.app.name": {
+          "value": "Spring Boot Webinar",
+          "origin": "class path resource [application.properties]:1:15"
+        }
+      }
+    }
+  ]
+}
+----
+
+The format of the JSON has changed since 1.5.
+We now present properties per property source.
+We also use the `Origin` if available to show where the property was loaded from.
+The format for a particular key has been improved as well, `http://localhost:8080/actuator/env/info.app.name[/actuator/env/info.app.name]` returns the following:
+
+[source,json]
+----
+{
+  "property": {
+    "source": "applicationConfig: [classpath:/application.properties]",
+    "value": "Spring Boot Webinar"
+  },
+  "activeProfiles": [],
+  "propertySources": [
+    {
+      "name": "server.ports"
+    },
+    {
+      "name": "systemProperties"
+    },
+    {
+      "name": "systemEnvironment"
+    },
+    {
+      "name": "random"
+    },
+    {
+      "name": "applicationConfig: [classpath:/application.properties]",
+      "property": {
+        "value": "Spring Boot Webinar",
+        "origin": "class path resource [application.properties]:1:15"
+      }
+    },
+    {
+      "name": "Management Server"
+    }
+  ]
+}
+----
+
+=== Path Matching defaults changed in 2.0
+
+This time, checking out `http://localhost:8080/team.json[/team.json]` won't work and returns an HTTP 404 instead.
+This is because we've decided to https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-2.0-Migration-Guide#spring-mvc-path-matching-default-behavior-change[change the path matching defaults in Spring Boot 2.0].
+
+There are several ways to fix that.
+
+First, you can turn back on this configuration property:
+
+[source,properties]
+----
+spring.mvc.contentnegotiation.favor-path-extension=true
+----
+
+The Spring Boot team changed that default for a few good reasons, so you should at least consider other solutions first.
+
+Instead of relying on path extensions, we could use a path parameter to influence the content negotiation process:
+
+[source,properties]
+----
+spring.mvc.contentnegotiation.favor-parameter=true
+----
+
+With that property enabled, we can choose the content type with a path parameter, like `http://localhost:8080/team?format=json[/team?format=json]`
+
+Of course, we could also restrict that part of our Web API to JSON only:
+
+[source,java]
+----
+@RestController
+@RequestMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+public class TeamMemberController {
+----
+
+Now the application should run as expected; we can still improve things with new features in Spring Boot 2.0.
+
+== Improving our Spring Boot 2.0 application
+
+=== Using `WebTestClient` in integration tests
+
+In our `SpringBootTeamApplicationTests` class, we're using an auto-configured `TestRestTemplate` to test our Web endpoint.
+`TestRestTemplate` is a nice tool we can use to query Web endpoints, but it wasn't meant to be a testing utility you can use to process assertions on the response.
+
+Spring WebFlux provides a `WebClient` and a dedicated `WebTestClient` for that purpose.
+We can add the WebFlux starter as a testing dependency:
+
+[source,xml]
+----
+<dependency>
+	<groupId>org.springframework.boot</groupId>
+	<artifactId>spring-boot-starter-webflux</artifactId>
+	<scope>test</scope>
+</dependency>
+----
+
+And then use the `WebTestClient` in our test class:
+
+[source,java]
+----
+@RunWith(SpringRunner.class)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+public class SpringBootTeamApplicationTests {
+
+	@Autowired
+	private WebTestClient webTestClient;
+
+	@Test
+	public void showTeamShouldReturnAllMembers() {
+		Team team = webTestClient.get().uri("/team")
+				.accept(MediaType.APPLICATION_JSON)
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(Team.class)
+				.returnResult().getResponseBody();
+
+		assertThat(team.getName()).isEqualTo("Spring Boot team");
+		assertThat(team.getMembers()).hasSize(5);
+	}
+
+}
+----
+
+=== Configuring SSL and HTTP/2
+
+Starting our application with the `prod` profile activated enables the `application-prod.properties` file and configures SSL for our application.
+
+[source,bash]
+----
+SPRING_PROFILES_ACTIVE=prod mvn spring-boot:run
+----
+
+Given the right prerequisites with our server of choice and our environment, enabling HTTP/2 is just a single configuration property away:
+
+[source,properties]
+----
+server.ssl.key-store=classpath:keystore.jks
+server.ssl.key-store-password=password
+server.ssl.key-password=secret
+server.ssl.enabled=true
+
+server.port=8443
+
+server.http2.enabled=true
+----
